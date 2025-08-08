@@ -179,7 +179,7 @@ def main():
     with st.sidebar:
         st.header("Configuration")
         max_pages = st.slider("Maximum pages to scrape", 1, 20, 5)
-        delay_between_requests = st.slider("Delay between requests (seconds)", 0.5, 3.0, 1.0)
+        st.info("Using Target's API for faster, more reliable data extraction")
     
     # Main interface
     brand_url = st.text_input(
@@ -226,9 +226,9 @@ def main():
             
             # Convert to DataFrame
             df = pd.DataFrame(products_data)
-                
-                st.success(f"✅ Successfully scraped {len(df)} products!")
-                
+            
+            st.success(f"✅ Successfully scraped {len(df)} products!")
+            
             # Display data preview
             st.subheader("Data Preview")
             st.dataframe(df, use_container_width=True)
@@ -254,7 +254,7 @@ def main():
             with col4:
                 products_with_price = len(df[df['Price'] != 'N/A'])
                 st.metric("Products with Price", products_with_price)
-                
+            
             # Download button
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"target_brand_data_{timestamp}.xlsx"
@@ -284,10 +284,7 @@ def main():
                 file_name=filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-        
-        else:
-            st.error("No product data could be extracted. The page structure might have changed.")
-        
+            
         except Exception as e:
             st.error(f"An error occurred during scraping: {str(e)}")
         
@@ -300,11 +297,11 @@ def main():
         st.markdown("""
         **How to use this app:**
         
-        1. **Find a Target brand page**: Go to Target.com and navigate to a brand page (e.g., search for a brand and go to their dedicated page)
+        1. **Find a Target brand page**: Go to Target.com and navigate to a brand page
         
-        2. **Copy the URL**: The URL should look something like:
+        2. **Copy the URL**: The URL should look like:
+           - `https://www.target.com/b/yoobi/-/N-551o8`
            - `https://www.target.com/b/nike/-/N-xxxxx`
-           - `https://www.target.com/b/apple/-/N-xxxxx`
         
         3. **Paste and scrape**: Enter the URL above and click "Start Scraping"
         
@@ -319,7 +316,10 @@ def main():
         - Review Count
         - Product URL
         
-        **Note**: Please be respectful of Target's servers. Use reasonable delays between requests.
+        **New in this version:**
+        - Uses Target's internal API for faster, more reliable data
+        - Automatic pagination handling
+        - Better error handling and user feedback
         """)
     
     # Disclaimer

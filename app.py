@@ -1,26 +1,12 @@
 import streamlit as st
+import requests
+from bs4 import BeautifulSoup
 import pandas as pd
 import re
 import time
+import json
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 from typing import List, Dict, Optional
-import os
-import tempfile
-
-# Try to import selenium components
-try:
-    from selenium import webdriver
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
-    from selenium.common.exceptions import TimeoutException, NoSuchElementException
-    from webdriver_manager.chrome import ChromeDriverManager
-    SELENIUM_AVAILABLE = True
-except ImportError:
-    SELENIUM_AVAILABLE = False
-    st.error("Selenium is not installed. Please install the required dependencies.")
 
 # Page configuration
 st.set_page_config(
@@ -31,219 +17,157 @@ st.set_page_config(
 
 class TargetScraper:
     def __init__(self):
-        self.driver = None
-        self.setup_driver()
+        self.session = requests.Session()
+        # Use headers that mimic a real browser more closely
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
+        })
     
-    def setup_driver(self):
-        """Setup Chrome driver with appropriate options"""
-        if not SELENIUM_AVAILABLE:
-            st.error("Selenium not available. Please check installation.")
-            return
-            
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--disable-extensions")
-        chrome_options.add_argument("--disable-plugins")
-        chrome_options.add_argument("--disable-images")
-        chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        
-        # Additional options for cloud deployment
-        chrome_options.add_argument("--disable-background-timer-throttling")
-        chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-        chrome_options.add_argument("--disable-renderer-backgrounding")
-        chrome_options.add_argument("--disable-features=TranslateUI")
-        chrome_options.add_argument("--disable-ipc-flooding-protection")
-        chrome_options.add_argument("--single-process")
-        chrome_options.add_argument("--disable-background-networking")
-        chrome_options.add_argument("--disable-default-apps")
-        chrome_options.add_argument("--disable-sync")
-        
-        try:
-            # Streamlit Cloud specific paths
-            chromium_paths = [
-                '/usr/bin/chromium',
-                '/usr/bin/chromium-browser', 
-                '/usr/bin/google-chrome',
-                '/usr/bin/google-chrome-stable'
-            ]
-            
-            chromium_path = None
-            for path in chromium_paths:
-                if os.path.exists(path):
-                    chromium_path = path
-                    break
-            
-            if chromium_path:
-                st.info(f"Using system Chrome at: {chromium_path}")
-                chrome_options.binary_location = chromium_path
-                
-                # Try to find chromedriver
-                driver_paths = [
-                    '/usr/bin/chromedriver',
-                    '/usr/local/bin/chromedriver'
-                ]
-                
-                driver_path = None
-                for path in driver_paths:
-                    if os.path.exists(path):
-                        driver_path = path
-                        break
-                
-                if driver_path:
-                    service = Service(driver_path)
-                    self.driver = webdriver.Chrome(service=service, options=chrome_options)
-                else:
-                    # Try without explicit service path
-                    self.driver = webdriver.Chrome(options=chrome_options)
-            else:
-                # Fallback to ChromeDriverManager
-                st.info("Using ChromeDriverManager...")
-                service = Service(ChromeDriverManager().install())
-                self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            
-            self.driver.implicitly_wait(10)
-            st.success("Chrome driver initialized successfully!")
-            
-        except Exception as e:
-            st.error(f"Failed to initialize Chrome driver: {str(e)}")
-            st.info("This might be a Streamlit Cloud configuration issue. Check the logs for more details.")
-            self.driver = None
-    
-    def extract_tcin_from_url(self, url: str) -> Optional[str]:
-        """Extract TCIN from product URL patterns"""
-        if not url:
-            return None
-            
-        patterns = [
-            r'/p/[^/]+-/A-(\d+)',
-            r'tcin[=:](\d+)',
-            r'/(\d{8})',
+    def try_api_approach(self, search_term: str, offset: int = 0) -> List[Dict]:
+        """Try to use Target's internal API endpoints"""
+        # Target's search API endpoint (reverse engineered)
+        api_urls = [
+            f"https://redsky.target.com/redsky_aggregations/v1/web/plp_search_v2?key=9f36aeafbe60771e321a7cc95a78140772ab3e96&channel=WEB&count=24&default_purchasability_filter=true&include_sponsored=true&keyword={search_term}&offset={offset}&platform=desktop&pricing_store_id=3991&useragent=Mozilla/5.0%20(Windows%20NT%2010.0;%20Win64;%20x64)%20AppleWebKit/537.36%20(KHTML,%20like%20Gecko)%20Chrome/120.0.0.0%20Safari/537.36&visitor_id=0181C4C6A8C902019A8A4B62F5BC68F7",
+            f"https://redsky.target.com/redsky_aggregations/v1/web/plp_search_v1?key=9f36aeafbe60771e321a7cc95a78140772ab3e96&channel=WEB&count=24&keyword={search_term}&offset={offset}",
         ]
         
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                return match.group(1)
-        return None
-    
-    def wait_for_products_to_load(self, timeout=20):
-        """Wait for product elements to load on the page"""
-        selectors_to_try = [
-            '[data-test="@web/site-top-of-funnel/ProductCardWrapper"]',
-            '[data-test="product-card"]',
-            '[data-test*="product"]',
-            'a[href*="/p/"]',
-            '[data-test="@web/ProductCard/ProductCardVariantDefault"]'
-        ]
-        
-        for selector in selectors_to_try:
+        for api_url in api_urls:
             try:
-                WebDriverWait(self.driver, timeout).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                )
-                return True
-            except TimeoutException:
+                response = self.session.get(api_url, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    return self.parse_api_response(data)
+            except Exception as e:
                 continue
         
-        return False
+        return []
     
-    def scroll_to_load_all_products(self):
-        """Scroll down to trigger lazy loading of all products"""
-        last_height = self.driver.execute_script("return document.body.scrollHeight")
+    def parse_api_response(self, data: dict) -> List[Dict]:
+        """Parse Target API response"""
+        products = []
         
-        while True:
-            # Scroll to bottom
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            
-            # Wait for new content to load
-            time.sleep(2)
-            
-            # Calculate new scroll height
-            new_height = self.driver.execute_script("return document.body.scrollHeight")
-            
-            if new_height == last_height:
-                break
-                
-            last_height = new_height
-    
-    def scrape_page(self, url: str) -> List[Dict]:
-        """Scrape a single page for product information"""
         try:
-            st.info(f"Loading page: {url}")
-            self.driver.get(url)
+            # Navigate the API response structure
+            search_response = data.get('data', {}).get('search', {})
+            products_data = search_response.get('products', [])
             
-            # Wait for products to load
-            if not self.wait_for_products_to_load():
-                st.warning("Products did not load within timeout period")
-                return []
+            for item in products_data:
+                product = {
+                    'tcin': item.get('tcin'),
+                    'title': item.get('item', {}).get('product_description', {}).get('title'),
+                    'image': None,
+                    'rating': None,
+                    'review_count': None,
+                    'price': None,
+                    'is_sponsored': item.get('is_sponsored', False)
+                }
+                
+                # Extract image
+                enrichment = item.get('item', {}).get('enrichment', {})
+                images = enrichment.get('images', {})
+                if images.get('primary_image_url'):
+                    product['image'] = images['primary_image_url']
+                
+                # Extract rating and reviews
+                guest_reviews = item.get('item', {}).get('guest_reviews', {})
+                if guest_reviews.get('average_rating'):
+                    product['rating'] = float(guest_reviews['average_rating'])
+                if guest_reviews.get('count'):
+                    product['review_count'] = int(guest_reviews['count'])
+                
+                # Extract price
+                price_info = item.get('price', {})
+                if price_info.get('formatted_current_price'):
+                    product['price'] = price_info['formatted_current_price']
+                elif price_info.get('current_retail'):
+                    product['price'] = f"${price_info['current_retail']}"
+                
+                if product['tcin']:  # Only add if we have a TCIN
+                    products.append(product)
+        
+        except Exception as e:
+            st.warning(f"Error parsing API response: {str(e)}")
+        
+        return products
+    
+    def extract_search_term_from_url(self, url: str) -> Optional[str]:
+        """Extract search term from Target URL"""
+        parsed = urlparse(url)
+        query_params = parse_qs(parsed.query)
+        
+        # Try different parameter names
+        for param in ['searchTerm', 'Ntt', 'q']:
+            if param in query_params:
+                return query_params[param][0].replace('+', ' ')
+        
+        # Try to extract from path
+        if '/s/' in parsed.path:
+            path_parts = parsed.path.split('/')
+            for part in path_parts:
+                if part and part != 's':
+                    return part.replace('-', ' ').replace('+', ' ')
+        
+        return None
+    
+    def scrape_with_requests(self, url: str) -> List[Dict]:
+        """Fallback scraping method using requests + BeautifulSoup"""
+        try:
+            response = self.session.get(url, timeout=15)
+            response.raise_for_status()
             
-            # Scroll to load all products (lazy loading)
-            st.info("Loading all products (handling lazy loading)...")
-            self.scroll_to_load_all_products()
-            
-            # Give extra time for all content to render
-            time.sleep(3)
+            # Look for JSON-LD structured data
+            soup = BeautifulSoup(response.content, 'html.parser')
             
             products = []
             
-            # Multiple selectors for product containers (updated for current Target structure)
-            product_selectors = [
-                '[data-test="@web/site-top-of-funnel/ProductCardWrapper"]',
-                '[data-test="@web/ProductCard/ProductCardVariantDefault"]',
-                '[data-test="product-card"]',
-                '[data-test*="ProductCard"]',
-                '[data-test*="sponsor"]',  # Specifically look for sponsored products
-                '[data-test*="ad"]',       # Ad-related selectors
-                'article[data-test*="product"]',
-                'div[data-test*="product"]',
-                'a[href*="/p/"]'
-            ]
-            
-            product_elements = []
-            for selector in product_selectors:
+            # Try to find JSON-LD structured data
+            json_scripts = soup.find_all('script', type='application/ld+json')
+            for script in json_scripts:
                 try:
-                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                    if elements:
-                        product_elements = elements
-                        st.success(f"Found {len(elements)} product elements using selector: {selector}")
-                        break
-                except Exception as e:
+                    data = json.loads(script.string)
+                    if isinstance(data, list):
+                        for item in data:
+                            if item.get('@type') == 'Product':
+                                products.append(self.parse_structured_data(item))
+                    elif data.get('@type') == 'Product':
+                        products.append(self.parse_structured_data(data))
+                except:
                     continue
             
-            if not product_elements:
-                st.error("No product elements found with any selector")
-                # Debug: Save page source for inspection
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as f:
-                    f.write(self.driver.page_source)
-                    st.info(f"Page source saved for debugging: {f.name}")
-                return []
+            # Try to extract from window.__PRELOADED_QUERIES__ or similar
+            script_tags = soup.find_all('script')
+            for script in script_tags:
+                if script.string and 'PRELOADED_QUERIES' in script.string:
+                    try:
+                        # Extract JSON data from script
+                        json_match = re.search(r'window\.__PRELOADED_QUERIES__\s*=\s*({.*?});', script.string, re.DOTALL)
+                        if json_match:
+                            data = json.loads(json_match.group(1))
+                            products.extend(self.parse_preloaded_data(data))
+                    except:
+                        continue
             
-            for i, element in enumerate(product_elements):
-                try:
-                    product_data = self.extract_product_data(element)
-                    if product_data and product_data.get('tcin'):
-                        products.append(product_data)
-                        if i % 10 == 0:  # Progress update every 10 products
-                            st.info(f"Processed {i+1}/{len(product_elements)} products...")
-                except Exception as e:
-                    continue
-            
-            st.success(f"Successfully extracted data from {len(products)} products")
             return products
             
         except Exception as e:
-            st.error(f"Error scraping page {url}: {str(e)}")
+            st.error(f"Error in requests fallback: {str(e)}")
             return []
     
-    def extract_product_data(self, element) -> Dict:
-        """Extract product data from a product element"""
+    def parse_structured_data(self, data: dict) -> Dict:
+        """Parse JSON-LD structured data"""
         product = {
             'tcin': None,
-            'title': None,
+            'title': data.get('name'),
             'image': None,
             'rating': None,
             'review_count': None,
@@ -251,216 +175,72 @@ class TargetScraper:
             'is_sponsored': False
         }
         
-        try:
-            # Check if product is sponsored
-            sponsored_indicators = [
-                '[data-test*="sponsor"]',
-                '.sponsored',
-                '[aria-label*="sponsor"]',
-                '[data-test*="ad"]',
-                'text*="Sponsored"'
-            ]
-            
-            for indicator in sponsored_indicators:
-                try:
-                    element.find_element(By.CSS_SELECTOR, indicator)
-                    product['is_sponsored'] = True
-                    break
-                except:
-                    continue
-            
-            # Also check for sponsored text in any child elements
-            try:
-                element_text = element.text.lower()
-                if 'sponsored' in element_text or 'ad' in element_text:
-                    product['is_sponsored'] = True
-            except:
-                pass
-            
-            # Extract TCIN from href attribute
-            try:
-                link = element.find_element(By.CSS_SELECTOR, 'a[href*="/p/"]')
-                href = link.get_attribute('href')
-                product['tcin'] = self.extract_tcin_from_url(href)
-            except:
-                # Try to find TCIN in data attributes
-                try:
-                    tcin_attr = element.get_attribute('data-test')
-                    if tcin_attr:
-                        tcin_match = re.search(r'(\d{8})', tcin_attr)
-                        if tcin_match:
-                            product['tcin'] = tcin_match.group(1)
-                except:
-                    pass
-            
-            # Extract title
-            title_selectors = [
-                'a[data-test="product-title"]',
-                '[data-test="product-title"] a',
-                'a[href*="/p/"]',
-                'h3 a',
-                'h2 a'
-            ]
-            
-            for selector in title_selectors:
-                try:
-                    title_elem = element.find_element(By.CSS_SELECTOR, selector)
-                    product['title'] = title_elem.text.strip()
-                    # Also extract TCIN from title link if not found yet
-                    if not product['tcin']:
-                        href = title_elem.get_attribute('href')
-                        product['tcin'] = self.extract_tcin_from_url(href)
-                    break
-                except:
-                    continue
-            
-            # Extract image
-            img_selectors = [
-                'img[data-test="product-image"]',
-                'img[alt*="product"]',
-                'img'
-            ]
-            
-            for selector in img_selectors:
-                try:
-                    img_elem = element.find_element(By.CSS_SELECTOR, selector)
-                    src = img_elem.get_attribute('src')
-                    if src and ('target.scene7.com' in src or 'target.com' in src):
-                        product['image'] = src
-                        break
-                except:
-                    continue
-            
-            # Extract rating
-            rating_selectors = [
-                '[data-test="ratings"]',
-                '[aria-label*="star"]',
-                '.sr-only'
-            ]
-            
-            for selector in rating_selectors:
-                try:
-                    rating_elem = element.find_element(By.CSS_SELECTOR, selector)
-                    text = rating_elem.get_attribute('aria-label') or rating_elem.text
-                    rating_match = re.search(r'(\d+\.?\d*)\s*out of 5', text, re.IGNORECASE)
-                    if rating_match:
-                        product['rating'] = float(rating_match.group(1))
-                        break
-                except:
-                    continue
-            
-            # Extract review count
-            review_selectors = [
-                '[data-test="rating-count"]',
-                'button[aria-label*="review"]',
-                'span[aria-label*="review"]',
-                'a[href*="reviews"]'
-            ]
-            
-            for selector in review_selectors:
-                try:
-                    review_elem = element.find_element(By.CSS_SELECTOR, selector)
-                    text = review_elem.text or review_elem.get_attribute('aria-label') or ""
-                    review_match = re.search(r'(\d+)', text.replace(',', ''))
-                    if review_match:
-                        product['review_count'] = int(review_match.group(1))
-                        break
-                except:
-                    continue
-            
-            # Extract price
-            price_selectors = [
-                '[data-test="product-price"]',
-                '.sr-only:contains("current price")',
-                'span[data-test="product-price-current"]'
-            ]
-            
-            for selector in price_selectors:
-                try:
-                    price_elem = element.find_element(By.CSS_SELECTOR, selector)
-                    text = price_elem.text
-                    price_match = re.search(r'\$(\d+\.?\d*)', text)
-                    if price_match:
-                        product['price'] = f"${price_match.group(1)}"
-                        break
-                except:
-                    continue
-            
-        except Exception as e:
-            pass
+        # Extract image
+        if data.get('image'):
+            if isinstance(data['image'], list):
+                product['image'] = data['image'][0]
+            else:
+                product['image'] = data['image']
+        
+        # Extract rating
+        if data.get('aggregateRating'):
+            rating_data = data['aggregateRating']
+            product['rating'] = float(rating_data.get('ratingValue', 0))
+            product['review_count'] = int(rating_data.get('reviewCount', 0))
+        
+        # Extract price
+        offers = data.get('offers', {})
+        if offers.get('price'):
+            product['price'] = f"${offers['price']}"
+        
+        # Try to extract TCIN from URL or identifier
+        if data.get('url'):
+            tcin_match = re.search(r'/p/[^/]+-/A-(\d+)', data['url'])
+            if tcin_match:
+                product['tcin'] = tcin_match.group(1)
         
         return product
     
-    def get_next_page_url(self) -> Optional[str]:
-        """Extract next page URL"""
-        next_selectors = [
-            'a[data-test="next"]',
-            'button[data-test="next"]',
-            'a[aria-label="next page"]',
-            'button[aria-label="Next page"]'
-        ]
-        
-        for selector in next_selectors:
-            try:
-                next_elem = self.driver.find_element(By.CSS_SELECTOR, selector)
-                if next_elem.is_enabled():
-                    href = next_elem.get_attribute('href')
-                    if href:
-                        return href
-                    # If it's a button, click it and get current URL
-                    current_url = self.driver.current_url
-                    next_elem.click()
-                    time.sleep(2)
-                    new_url = self.driver.current_url
-                    if new_url != current_url:
-                        return new_url
-            except:
-                continue
-        
-        return None
+    def parse_preloaded_data(self, data: dict) -> List[Dict]:
+        """Parse preloaded query data"""
+        products = []
+        # This would need to be customized based on Target's actual data structure
+        # which can be found by inspecting the page source
+        return products
     
     def scrape_all_pages(self, start_url: str, max_pages: int = 10) -> pd.DataFrame:
-        """Scrape all pages starting from the given URL"""
-        if not self.driver:
-            st.error("Browser driver not initialized")
-            return pd.DataFrame()
-        
+        """Scrape all pages with multiple approaches"""
         all_products = []
-        current_url = start_url
-        page_count = 0
         
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        # First, try API approach if we can extract search term
+        search_term = self.extract_search_term_from_url(start_url)
         
-        while page_count < max_pages:
-            page_count += 1
-            status_text.text(f"Scraping page {page_count}...")
+        if search_term:
+            st.info(f"Attempting API approach for search term: '{search_term}'")
             
-            # Scrape current page
-            products = self.scrape_page(current_url)
-            
-            if not products:
-                st.warning(f"No products found on page {page_count}. Stopping.")
-                break
-            
+            for page in range(max_pages):
+                offset = page * 24
+                st.info(f"Trying API for page {page + 1} (offset: {offset})")
+                
+                api_products = self.try_api_approach(search_term, offset)
+                
+                if not api_products:
+                    st.warning(f"API approach failed for page {page + 1}")
+                    break
+                
+                all_products.extend(api_products)
+                st.success(f"API Page {page + 1}: Found {len(api_products)} products")
+                
+                if len(api_products) < 24:  # Less than full page means we're done
+                    break
+                
+                time.sleep(1)  # Be respectful
+        
+        # If API approach didn't work or found no products, try web scraping
+        if not all_products:
+            st.info("Falling back to web scraping approach...")
+            products = self.scrape_with_requests(start_url)
             all_products.extend(products)
-            st.success(f"Page {page_count}: Found {len(products)} products")
-            
-            # Try to find next page
-            next_url = self.get_next_page_url()
-            
-            if not next_url or next_url == current_url:
-                st.info("No more pages found.")
-                break
-            
-            current_url = next_url
-            progress_bar.progress(min(page_count / max_pages, 1.0))
-            
-            # Add delay to be respectful
-            time.sleep(2)
-        
-        progress_bar.progress(1.0)
-        status_text.text(f"Completed! Scraped {page_count} pages.")
         
         # Convert to DataFrame
         df = pd.DataFrame(all_products)
@@ -474,25 +254,12 @@ class TargetScraper:
                 st.info(f"Removed {initial_count - final_count} duplicate products")
         
         return df
-    
-    def close(self):
-        """Clean up the driver"""
-        if self.driver:
-            self.driver.quit()
 
 def main():
-    st.title("🎯 Target Product Scraper (JavaScript-Enabled)")
-    st.markdown("Extract product information from Target.com search results using Selenium WebDriver")
+    st.title("🎯 Target Product Scraper (Streamlit Cloud Compatible)")
+    st.markdown("Extract product information from Target.com using API and web scraping approaches")
     
-    if not SELENIUM_AVAILABLE:
-        st.error("This app requires Selenium and ChromeDriver to handle JavaScript-rendered content.")
-        st.markdown("""
-        **To fix this, install the required dependencies:**
-        ```bash
-        pip install selenium webdriver-manager
-        ```
-        """)
-        return
+    st.info("💡 **Note**: This version uses API calls and structured data parsing, which works on Streamlit Cloud without requiring browser automation.")
     
     # Sidebar configuration
     st.sidebar.header("Configuration")
@@ -502,7 +269,7 @@ def main():
     url_input = st.text_input(
         "Enter Target.com URL:",
         placeholder="https://www.target.com/s?searchTerm=your+search+term",
-        help="Enter a Target.com search results URL or category page URL"
+        help="Enter a Target.com search results URL"
     )
     
     # Validate URL
@@ -515,80 +282,116 @@ def main():
             st.error("Please enter a URL")
             return
         
-        scraper = None
-        try:
-            # Initialize scraper
-            with st.spinner("Initializing browser..."):
-                scraper = TargetScraper()
-                
-            if not scraper.driver:
-                st.error("Failed to initialize browser. Please check your setup.")
-                return
-            
-            # Start scraping
-            with st.spinner("Scraping pages..."):
-                df = scraper.scrape_all_pages(url_input, max_pages)
-            
-            if df.empty:
-                st.error("No products found. The page might not contain product listings or there might be an issue with the scraping.")
-            else:
-                st.success(f"Successfully scraped {len(df)} unique products!")
-                
-                # Display results
-                st.subheader("Scraped Data Preview")
-                st.dataframe(df, use_container_width=True)
-                
-                # Display statistics
-                col1, col2, col3, col4, col5, col6 = st.columns(6)
-                with col1:
-                    st.metric("Total Products", len(df))
-                with col2:
-                    st.metric("With Ratings", df['rating'].notna().sum())
-                with col3:
-                    st.metric("With Reviews", df['review_count'].notna().sum())
-                with col4:
-                    avg_rating = df['rating'].mean()
-                    st.metric("Avg Rating", f"{avg_rating:.2f}" if pd.notna(avg_rating) else "N/A")
-                with col5:
-                    st.metric("With Price", df['price'].notna().sum())
-                with col6:
-                    sponsored_count = df['is_sponsored'].sum() if 'is_sponsored' in df.columns else 0
-                    st.metric("Sponsored", sponsored_count)
-                
-                # Download options
-                st.subheader("Export Data")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    csv = df.to_csv(index=False)
-                    st.download_button(
-                        label="📄 Download as CSV",
-                        data=csv,
-                        file_name="target_products.csv",
-                        mime="text/csv"
-                    )
-                
-                with col2:
-                    # Create Excel file
-                    excel_buffer = pd.io.common.BytesIO()
-                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                        df.to_excel(writer, sheet_name='Target Products', index=False)
-                    excel_buffer.seek(0)
-                    
-                    st.download_button(
-                        label="📊 Download as Excel",
-                        data=excel_buffer.getvalue(),
-                        file_name="target_products.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+        # Initialize scraper
+        scraper = TargetScraper()
         
-        except Exception as e:
-            st.error(f"An error occurred: {str(e)}")
+        # Start scraping
+        with st.spinner("Extracting product data..."):
+            df = scraper.scrape_all_pages(url_input, max_pages)
         
-        finally:
-            # Clean up
-            if scraper:
-                scraper.close()
+        if df.empty:
+            st.error("No products found. This could be due to:")
+            st.markdown("""
+            - Target's API structure has changed
+            - The URL doesn't contain a valid search term
+            - Rate limiting or blocking
+            - The page doesn't have structured data
+            """)
+            
+            st.markdown("**Try:**")
+            st.markdown("- Using a direct search URL like: `https://www.target.com/s?searchTerm=coffee`")
+            st.markdown("- Waiting a few minutes and trying again")
+        else:
+            st.success(f"Successfully scraped {len(df)} unique products!")
+            
+            # Display results
+            st.subheader("Scraped Data Preview")
+            st.dataframe(df, use_container_width=True)
+            
+            # Display statistics
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
+            with col1:
+                st.metric("Total Products", len(df))
+            with col2:
+                st.metric("With Ratings", df['rating'].notna().sum())
+            with col3:
+                st.metric("With Reviews", df['review_count'].notna().sum())
+            with col4:
+                avg_rating = df['rating'].mean()
+                st.metric("Avg Rating", f"{avg_rating:.2f}" if pd.notna(avg_rating) else "N/A")
+            with col5:
+                st.metric("With Price", df['price'].notna().sum())
+            with col6:
+                sponsored_count = df['is_sponsored'].sum() if 'is_sponsored' in df.columns else 0
+                st.metric("Sponsored", sponsored_count)
+            
+            # Filter options
+            st.subheader("Filter Results")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                show_sponsored = st.checkbox("Include Sponsored Products", value=True)
+            with col2:
+                min_rating = st.slider("Minimum Rating", 0.0, 5.0, 0.0, 0.1)
+            
+            # Apply filters
+            filtered_df = df.copy()
+            if not show_sponsored and 'is_sponsored' in df.columns:
+                filtered_df = filtered_df[~filtered_df['is_sponsored']]
+            if min_rating > 0:
+                filtered_df = filtered_df[filtered_df['rating'] >= min_rating]
+            
+            if len(filtered_df) != len(df):
+                st.info(f"Filtered to {len(filtered_df)} products")
+                st.dataframe(filtered_df, use_container_width=True)
+            
+            # Download options
+            st.subheader("Export Data")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                csv = filtered_df.to_csv(index=False)
+                st.download_button(
+                    label="📄 Download as CSV",
+                    data=csv,
+                    file_name="target_products.csv",
+                    mime="text/csv"
+                )
+            
+            with col2:
+                # Create Excel file
+                excel_buffer = pd.io.common.BytesIO()
+                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                    filtered_df.to_excel(writer, sheet_name='Target Products', index=False)
+                excel_buffer.seek(0)
+                
+                st.download_button(
+                    label="📊 Download as Excel",
+                    data=excel_buffer.getvalue(),
+                    file_name="target_products.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+    # Add troubleshooting section
+    with st.expander("🔧 Troubleshooting & Tips"):
+        st.markdown("""
+        **If you're getting no results:**
+        1. Make sure you're using a search URL like: `https://www.target.com/s?searchTerm=coffee`
+        2. Try different search terms
+        3. Target might be blocking automated requests - try waiting and retrying
+        
+        **Best URL formats:**
+        - Search: `https://www.target.com/s?searchTerm=your+search`
+        - Category: `https://www.target.com/c/electronics`
+        
+        **Data Sources:**
+        - Primary: Target's internal API endpoints
+        - Fallback: Structured data from HTML pages
+        
+        **Limitations:**
+        - Some dynamic content might not be captured without browser automation
+        - Rate limiting may apply for large scraping jobs
+        """)
 
 if __name__ == "__main__":
     main()

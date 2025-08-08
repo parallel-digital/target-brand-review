@@ -50,10 +50,24 @@ class TargetScraper:
         chrome_options.add_argument("--disable-images")  # Faster loading
         chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
+        # Additional options for cloud deployment
+        chrome_options.add_argument("--disable-background-timer-throttling")
+        chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+        chrome_options.add_argument("--disable-renderer-backgrounding")
+        chrome_options.add_argument("--disable-features=TranslateUI")
+        chrome_options.add_argument("--disable-ipc-flooding-protection")
+        
         try:
-            # Try to use ChromeDriverManager for automatic driver management
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            # Check if running on Streamlit Cloud or similar
+            if os.path.exists('/usr/bin/chromium') or os.path.exists('/usr/bin/chromium-browser'):
+                # Use system chromium (Streamlit Cloud)
+                chrome_options.binary_location = '/usr/bin/chromium'
+                self.driver = webdriver.Chrome(options=chrome_options)
+            else:
+                # Use ChromeDriverManager for other platforms
+                service = Service(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            
             self.driver.implicitly_wait(10)
         except Exception as e:
             st.error(f"Failed to initialize Chrome driver: {str(e)}")

@@ -37,6 +37,7 @@ class TargetScraper:
     def setup_driver(self):
         """Setup Chrome driver with appropriate options"""
         if not SELENIUM_AVAILABLE:
+            st.error("Selenium not available. Please check installation.")
             return
             
         chrome_options = Options()
@@ -47,7 +48,7 @@ class TargetScraper:
         chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument("--disable-extensions")
         chrome_options.add_argument("--disable-plugins")
-        chrome_options.add_argument("--disable-images")  # Faster loading
+        chrome_options.add_argument("--disable-images")
         chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
         # Additional options for cloud deployment
@@ -56,22 +57,61 @@ class TargetScraper:
         chrome_options.add_argument("--disable-renderer-backgrounding")
         chrome_options.add_argument("--disable-features=TranslateUI")
         chrome_options.add_argument("--disable-ipc-flooding-protection")
+        chrome_options.add_argument("--single-process")
+        chrome_options.add_argument("--disable-background-networking")
+        chrome_options.add_argument("--disable-default-apps")
+        chrome_options.add_argument("--disable-sync")
         
         try:
-            # Check if running on Streamlit Cloud or similar
-            if os.path.exists('/usr/bin/chromium') or os.path.exists('/usr/bin/chromium-browser'):
-                # Use system chromium (Streamlit Cloud)
-                chrome_options.binary_location = '/usr/bin/chromium'
-                self.driver = webdriver.Chrome(options=chrome_options)
+            # Streamlit Cloud specific paths
+            chromium_paths = [
+                '/usr/bin/chromium',
+                '/usr/bin/chromium-browser', 
+                '/usr/bin/google-chrome',
+                '/usr/bin/google-chrome-stable'
+            ]
+            
+            chromium_path = None
+            for path in chromium_paths:
+                if os.path.exists(path):
+                    chromium_path = path
+                    break
+            
+            if chromium_path:
+                st.info(f"Using system Chrome at: {chromium_path}")
+                chrome_options.binary_location = chromium_path
+                
+                # Try to find chromedriver
+                driver_paths = [
+                    '/usr/bin/chromedriver',
+                    '/usr/local/bin/chromedriver'
+                ]
+                
+                driver_path = None
+                for path in driver_paths:
+                    if os.path.exists(path):
+                        driver_path = path
+                        break
+                
+                if driver_path:
+                    service = Service(driver_path)
+                    self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                else:
+                    # Try without explicit service path
+                    self.driver = webdriver.Chrome(options=chrome_options)
             else:
-                # Use ChromeDriverManager for other platforms
+                # Fallback to ChromeDriverManager
+                st.info("Using ChromeDriverManager...")
                 service = Service(ChromeDriverManager().install())
                 self.driver = webdriver.Chrome(service=service, options=chrome_options)
             
             self.driver.implicitly_wait(10)
+            st.success("Chrome driver initialized successfully!")
+            
         except Exception as e:
             st.error(f"Failed to initialize Chrome driver: {str(e)}")
-            st.info("Try installing ChromeDriver manually or use a different deployment method.")
+            st.info("This might be a Streamlit Cloud configuration issue. Check the logs for more details.")
+            self.driver = None
     
     def extract_tcin_from_url(self, url: str) -> Optional[str]:
         """Extract TCIN from product URL patterns"""

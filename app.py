@@ -31,25 +31,32 @@ class TargetScraper:
         self.products = []
         self.base_api_url = "https://redsky.target.com/redsky_aggregations/v1/web/"
     
-    def extract_brand_id_from_url(self, url):
-        """Extract brand category ID from Target brand URL"""
+    def extract_search_term_from_url(self, url):
+        """Extract search term from Target search URL or convert brand URL to search term"""
         try:
-            # Extract N-xxxxx pattern from URL
-            match = re.search(r'N-([a-zA-Z0-9]+)', url)
-            if match:
-                return match.group(1)
+            # If it's already a search URL
+            if 'searchTerm=' in url:
+                match = re.search(r'searchTerm=([^&]+)', url)
+                return match.group(1) if match else None
+            
+            # If it's a brand URL, extract brand name
+            elif '/b/' in url:
+                # Extract brand name from URL like /b/yoobi/
+                match = re.search(r'/b/([^/\-]+)', url)
+                return match.group(1) if match else None
+            
             return None
         except:
             return None
     
-    def get_brand_products_api(self, brand_url, offset=0, limit=24):
-        """Get products using Target's internal API"""
+    def get_search_products_api(self, search_url, offset=0, limit=24):
+        """Get products using Target's search API"""
         try:
-            brand_id = self.extract_brand_id_from_url(brand_url)
-            if not brand_id:
+            search_term = self.extract_search_term_from_url(search_url)
+            if not search_term:
                 return []
             
-            # Target's API endpoint for category/brand pages
+            # Target's search API endpoint
             api_url = f"{self.base_api_url}plp_search_v2"
             
             params = {
@@ -57,15 +64,14 @@ class TargetScraper:
                 'count': limit,
                 'default_purchasability_filter': 'true',
                 'include_sponsored': 'true',
-                'keyword': '',
+                'keyword': search_term,
                 'offset': offset,
                 'platform': 'desktop',
                 'pricing_store_id': '1375',
                 'store_ids': '1375,2084,2715,2746',
                 'useragent': 'Mozilla/5.0',
                 'visitor_id': 'placeholder',
-                'zip': '55403',
-                'category': brand_id
+                'zip': '55403'
             }
             
             response = self.session.get(api_url, params=params, timeout=15)
@@ -88,11 +94,50 @@ class TargetScraper:
                 
                 return products
             else:
-                st.warning(f"API returned status code: {response.status_code}")
-                return []
+                st.warning(f"API returned status code: {response.status_code}. Trying fallback method...")
+                return self.fallback_search_scrape(search_term, offset, limit)
                 
         except Exception as e:
-            st.error(f"API request failed: {str(e)}")
+            st.warning(f"API request failed: {str(e)}. Trying fallback method...")
+            search_term = self.extract_search_term_from_url(search_url)
+            return self.fallback_search_scrape(search_term, offset, limit) if search_term else []
+    
+    def fallback_search_scrape(self, search_term, offset=0, limit=24):
+        """Fallback method using direct HTML scraping of search results"""
+        try:
+            # Construct search URL
+            search_url = f"https://www.target.com/s?searchTerm={search_term}&offset={offset}"
+            
+            response = self.session.get(search_url, timeout=15)
+            response.raise_for_status()
+            
+            # Look for JSON data in script tags
+            soup = BeautifulSoup(response.content, 'html.parser')
+            script_tags = soup.find_all('script')
+            
+            products = []
+            for script in script_tags:
+                if script.string and 'searchResponse' in script.string:
+                    try:
+                        # Extract JSON data from script tag
+                        json_match = re.search(r'window\.__TGT_DATA__\s*=\s*({.*?});', script.string, re.DOTALL)
+                        if json_match:
+                            data = json.loads(json_match.group(1))
+                            # Navigate to products in the data structure
+                            if 'searchResponse' in data:
+                                search_results = data['searchResponse']['searchResponse']['products']
+                                for product in search_results:
+                                    product_info = self.parse_api_product(product)
+                                    if product_info:
+                                        products.append(product_info)
+                        break
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+            
+            return products
+            
+        except Exception as e:
+            st.error(f"Fallback scraping failed: {str(e)}")
             return []
     
     def parse_api_product(self, product_data):
@@ -142,8 +187,8 @@ class TargetScraper:
         except Exception as e:
             return None
     
-    def get_all_brand_products(self, brand_url, max_pages=10):
-        """Get all products from brand using API pagination"""
+    def get_all_brand_products(self, search_url, max_pages=10):
+        """Get all products from search using API pagination"""
         all_products = []
         offset = 0
         limit = 24
@@ -151,7 +196,7 @@ class TargetScraper:
         for page in range(max_pages):
             try:
                 st.info(f"Fetching page {page + 1}...")
-                products = self.get_brand_products_api(brand_url, offset=offset, limit=limit)
+                products = self.get_search_products_api(search_url, offset=offset, limit=limit)
                 
                 if not products:
                     break
@@ -182,18 +227,49 @@ def main():
         st.info("Using Target's API for faster, more reliable data extraction")
     
     # Main interface
-    brand_url = st.text_input(
-        "Enter Target Brand Page URL:",
-        placeholder="https://www.target.com/b/brand-name/-/N-xxxxx",
-        help="Enter the full URL of the Target brand page you want to scrape"
-    )
+    st.markdown("### Enter URL or Search Term")
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        input_url = st.text_input(
+            "Target URL or Search Term:",
+            placeholder="https://www.target.com/s?searchTerm=yoobi OR just 'yoobi'",
+            help="Enter either a Target search URL or just the brand/product name"
+        )
+    
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)  # Add space
+        convert_to_search = st.checkbox("Auto-convert to search", value=True, help="Automatically convert brand URLs to search URLs")
+    
+    # Convert input to proper search URL if needed
+    if input_url:
+        if input_url.startswith('http'):
+            if convert_to_search and '/b/' in input_url:
+                # Convert brand URL to search URL
+                search_term = None
+                brand_match = re.search(r'/b/([^/\-]+)', input_url)
+                if brand_match:
+                    search_term = brand_match.group(1)
+                    search_url = f"https://www.target.com/s?searchTerm={search_term}"
+                    st.info(f"🔄 Converted to search URL: {search_url}")
+                else:
+                    search_url = input_url
+            else:
+                search_url = input_url
+        else:
+            # Treat as search term
+            search_url = f"https://www.target.com/s?searchTerm={input_url}"
+            st.info(f"🔍 Using search URL: {search_url}")
+    else:
+        search_url = ""
     
     if st.button("Start Scraping", type="primary"):
-        if not brand_url:
-            st.error("Please enter a brand URL")
+        if not search_url:
+            st.error("Please enter a URL or search term")
             return
         
-        if "target.com" not in brand_url.lower():
+        if search_url.startswith('http') and "target.com" not in search_url.lower():
             st.error("Please enter a valid Target.com URL")
             return
         
@@ -204,9 +280,9 @@ def main():
         status_text = st.empty()
         
         try:
-            # Step 1: Get all products using API
-            status_text.text("🔍 Fetching products from Target API...")
-            products_data = scraper.get_all_brand_products(brand_url, max_pages)
+            # Step 1: Get all products using search API
+            status_text.text("🔍 Fetching products from Target search...")
+            products_data = scraper.get_all_brand_products(search_url, max_pages)
             
             if not products_data:
                 st.error("No products found. This could be due to:")
@@ -297,15 +373,16 @@ def main():
         st.markdown("""
         **How to use this app:**
         
-        1. **Find a Target brand page**: Go to Target.com and navigate to a brand page
+        1. **Enter search info**: You can use either:
+           - **Search term**: Just type `yoobi` or `nike`
+           - **Search URL**: `https://www.target.com/s?searchTerm=yoobi`
+           - **Brand URL**: `https://www.target.com/b/yoobi/-/N-551o8` (will auto-convert)
         
-        2. **Copy the URL**: The URL should look like:
-           - `https://www.target.com/b/yoobi/-/N-551o8`
-           - `https://www.target.com/b/nike/-/N-xxxxx`
+        2. **Auto-conversion**: The app automatically converts brand URLs to search URLs for better results
         
-        3. **Paste and scrape**: Enter the URL above and click "Start Scraping"
+        3. **Start scraping**: Click "Start Scraping" to begin data extraction
         
-        4. **Download results**: Once complete, download the Excel file with all product data
+        4. **Download results**: Get your Excel file with all product data
         
         **Data extracted:**
         - TCIN (Target product ID)
@@ -316,10 +393,11 @@ def main():
         - Review Count
         - Product URL
         
-        **New in this version:**
-        - Uses Target's internal API for faster, more reliable data
-        - Automatic pagination handling
-        - Better error handling and user feedback
+        **Why search URLs work better:**
+        - No authentication required
+        - More comprehensive results
+        - Better API access
+        - Handles all product variations
         """)
     
     # Disclaimer
